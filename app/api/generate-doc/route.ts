@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateCVDocx, generateResumeDocx, generateCoverLetterDocx, generateEmailTemplatesDocx, generateBioSheetDocx } from '@/lib/docx-generator';
+import { 
+  generateCVDocx, 
+  generateResumeDocx, 
+  generateCoverLetterDocx, 
+  generateEmailTemplatesDocx, 
+  generateBioSheetDocx 
+} from '@/lib/docx-generator';
 import { generateCVPdf } from '@/lib/pdf-generator';
 import { DocType, DownloadFormat } from '@/lib/types';
 
@@ -11,13 +17,16 @@ export async function POST(request: NextRequest) {
       templates, bios,
     } = await request.json();
 
-    if (!content && !templates && !bios) return NextResponse.json({ error: 'Content required' }, { status: 400 });
+    if (!content && !templates && !bios) {
+      return NextResponse.json({ error: 'Content required' }, { status: 400 });
+    }
 
     const safeName = (candidateName || 'CV').replace(/\s+/g, '_');
-    let fileBuffer: Buffer;
+    let fileBuffer: Uint8Array; // Changed from Buffer to Uint8Array
     let mimeType: string;
     let ext: string;
 
+    // TXT format
     if (format === 'txt') {
       const text = (content as string)
         .replace(/^# /gm, '').replace(/^## /gm, '\n── ')
@@ -31,6 +40,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // HTML format
     if (format === 'html') {
       const html = buildHTML(content, candidateName);
       return new NextResponse(html, {
@@ -41,52 +51,59 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // PDF format
     if (format === 'pdf') {
-      fileBuffer = await generateCVPdf(content, candidateName);
+      fileBuffer = new Uint8Array(await generateCVPdf(content, candidateName));
       mimeType = 'application/pdf';
       ext = 'pdf';
     } else {
-      // DOCX
+      // DOCX format
       switch (docType as DocType) {
         case 'cv':
-          fileBuffer = await generateCVDocx(content, candidateName);
+          fileBuffer = new Uint8Array(await generateCVDocx(content, candidateName));
           break;
         case 'resume':
-          fileBuffer = await generateResumeDocx(content, candidateName);
+          fileBuffer = new Uint8Array(await generateResumeDocx(content, candidateName));
           break;
         case 'cover-letter':
-          fileBuffer = await generateCoverLetterDocx(content, candidateName, phone, email);
+          fileBuffer = new Uint8Array(await generateCoverLetterDocx(content, candidateName, phone, email));
           break;
         case 'email-templates':
-          fileBuffer = await generateEmailTemplatesDocx(templates || [], candidateName);
+          fileBuffer = new Uint8Array(await generateEmailTemplatesDocx(templates || [], candidateName));
           break;
         case 'bio-sheet':
-          fileBuffer = await generateBioSheetDocx(bios || {}, candidateName);
+          fileBuffer = new Uint8Array(await generateBioSheetDocx(bios || {}, candidateName));
           break;
         default:
-          fileBuffer = await generateCVDocx(content, candidateName);
+          fileBuffer = new Uint8Array(await generateCVDocx(content, candidateName));
       }
       mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
       ext = 'docx';
     }
 
     const docLabel = {
-      cv: 'CV', resume: 'Resume', 'cover-letter': 'CoverLetter',
-      'email-templates': 'EmailTemplates', 'bio-sheet': 'BioSheet',
+      cv: 'CV', 
+      resume: 'Resume', 
+      'cover-letter': 'CoverLetter',
+      'email-templates': 'EmailTemplates', 
+      'bio-sheet': 'BioSheet',
     }[docType as DocType] || 'Document';
 
+    // ✅ Corrected return with Uint8Array
     return new NextResponse(fileBuffer, {
       headers: {
         'Content-Type': mimeType,
         'Content-Disposition': `attachment; filename="${safeName}_${docLabel}.${ext}"`,
       },
     });
+
   } catch (e) {
     console.error('generate-doc error:', e);
     return NextResponse.json({ error: 'Generation failed' }, { status: 500 });
   }
 }
 
+// Helper function to convert markdown to HTML
 function buildHTML(markdown: string, name: string): string {
   const body = markdown
     .replace(/^# (.*)/gm, '<h1>$1</h1>')
