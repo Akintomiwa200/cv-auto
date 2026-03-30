@@ -1,3 +1,4 @@
+// app/api/generate-doc/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { 
   generateCVDocx, 
@@ -7,7 +8,7 @@ import {
   generateBioSheetDocx 
 } from '@/lib/docx-generator';
 import { generateCVPdf } from '@/lib/pdf-generator';
-import { DocType, DownloadFormat } from '@/lib/types';
+import { DocType } from '@/lib/types';
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,16 +23,17 @@ export async function POST(request: NextRequest) {
     }
 
     const safeName = (candidateName || 'CV').replace(/\s+/g, '_');
-    let fileBuffer: Uint8Array; // Changed from Buffer to Uint8Array
-    let mimeType: string;
-    let ext: string;
 
-    // TXT format
+    // ===== TXT format =====
     if (format === 'txt') {
       const text = (content as string)
-        .replace(/^# /gm, '').replace(/^## /gm, '\n── ')
-        .replace(/^### /gm, '').replace(/\*\*(.*?)\*\*/g, '$1')
-        .replace(/^- /gm, '• ').replace(/^---$/gm, '─'.repeat(55));
+        .replace(/^# /gm, '')
+        .replace(/^## /gm, '\n── ')
+        .replace(/^### /gm, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/^- /gm, '• ')
+        .replace(/^---$/gm, '─'.repeat(55));
+
       return new NextResponse(text, {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
@@ -40,7 +42,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // HTML format
+    // ===== HTML format =====
     if (format === 'html') {
       const html = buildHTML(content, candidateName);
       return new NextResponse(html, {
@@ -51,50 +53,57 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // PDF format
+    // ===== PDF or DOCX format =====
+    let rawData: any;
+    let mimeType: string;
+    let ext: string;
+
     if (format === 'pdf') {
-      fileBuffer = new Uint8Array(await generateCVPdf(content, candidateName));
+      rawData = await generateCVPdf(content, candidateName);
       mimeType = 'application/pdf';
       ext = 'pdf';
     } else {
-      // DOCX format
       switch (docType as DocType) {
         case 'cv':
-          fileBuffer = new Uint8Array(await generateCVDocx(content, candidateName));
+          rawData = await generateCVDocx(content, candidateName);
           break;
         case 'resume':
-          fileBuffer = new Uint8Array(await generateResumeDocx(content, candidateName));
+          rawData = await generateResumeDocx(content, candidateName);
           break;
         case 'cover-letter':
-          fileBuffer = new Uint8Array(await generateCoverLetterDocx(content, candidateName, phone, email));
+          rawData = await generateCoverLetterDocx(content, candidateName, phone, email);
           break;
         case 'email-templates':
-          fileBuffer = new Uint8Array(await generateEmailTemplatesDocx(templates || [], candidateName));
+          rawData = await generateEmailTemplatesDocx(templates || [], candidateName);
           break;
         case 'bio-sheet':
-          fileBuffer = new Uint8Array(await generateBioSheetDocx(bios || {}, candidateName));
+          rawData = await generateBioSheetDocx(bios || {}, candidateName);
           break;
         default:
-          fileBuffer = new Uint8Array(await generateCVDocx(content, candidateName));
+          rawData = await generateCVDocx(content, candidateName);
       }
       mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
       ext = 'docx';
     }
 
     const docLabel = {
-      cv: 'CV', 
-      resume: 'Resume', 
+      cv: 'CV',
+      resume: 'Resume',
       'cover-letter': 'CoverLetter',
-      'email-templates': 'EmailTemplates', 
+      'email-templates': 'EmailTemplates',
       'bio-sheet': 'BioSheet',
     }[docType as DocType] || 'Document';
 
-    // ✅ Corrected return with Uint8Array
-    return new NextResponse(fileBuffer, {
-      headers: {
-        'Content-Type': mimeType,
-        'Content-Disposition': `attachment; filename="${safeName}_${docLabel}.${ext}"`,
-      },
+    // Convert to base64 to avoid TypeScript buffer issues
+    const buffer = Buffer.from(rawData);
+    const base64 = buffer.toString('base64');
+
+    // Return as JSON with base64 encoded data
+    return NextResponse.json({
+      success: true,
+      data: base64,
+      mimeType: mimeType,
+      filename: `${safeName}_${docLabel}.${ext}`,
     });
 
   } catch (e) {
@@ -103,36 +112,120 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Helper function to convert markdown to HTML
+// ===== Helper function: Markdown → HTML =====
 function buildHTML(markdown: string, name: string): string {
-  const body = markdown
-    .replace(/^# (.*)/gm, '<h1>$1</h1>')
-    .replace(/^## (.*)/gm, '<h2>$1</h2>')
-    .replace(/^### (.*)/gm, '<h3>$1</h3>')
-    .replace(/^\- (.*)/gm, '<li>$1</li>')
-    .replace(/^\* (.*)/gm, '<li>$1</li>')
-    .replace(/<li>[\s\S]*?<\/li>/g, m => `<ul>${m}</ul>`)
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/^---$/gm, '<hr>')
-    .split('\n').map(l => l.startsWith('<') ? l : `<p>${l}</p>`).join('\n');
+  let processed = markdown;
+  
+  processed = processed.replace(/^# (.*)/gm, '<h1>$1</h1>');
+  processed = processed.replace(/^## (.*)/gm, '<h2>$1</h2>');
+  processed = processed.replace(/^### (.*)/gm, '<h3>$1</h3>');
+  processed = processed.replace(/^- (.*)/gm, '<li>$1</li>');
+  processed = processed.replace(/^\* (.*)/gm, '<li>$1</li>');
+  processed = processed.replace(/(<li>.*?<\/li>\n?)+/g, (match) => `<ul class="list">${match}</ul>`);
+  processed = processed.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  processed = processed.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  processed = processed.replace(/^---$/gm, '<hr>');
+  
+  const lines = processed.split('\n');
+  const wrapped = lines.map(line => {
+    if (line.trim() === '') return '';
+    if (line.startsWith('<h') || line.startsWith('<ul') || line.startsWith('</ul') || line.startsWith('<hr')) {
+      return line;
+    }
+    return `<p>${line}</p>`;
+  }).filter(line => line !== '').join('\n');
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>${name} — CV</title>
-<style>
-  body { font-family: Georgia, serif; max-width: 800px; margin: 40px auto; padding: 40px; color: #1a1a2e; line-height: 1.65; }
-  h1 { font-size: 28px; border-bottom: 2.5px solid #0A2540; padding-bottom: 10px; margin-bottom: 6px; color: #0A2540; }
-  h2 { font-size: 10.5px; text-transform: uppercase; letter-spacing: .13em; color: #0D7C66; border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 28px; margin-bottom: 12px; }
-  h3 { font-size: 14px; font-weight: 600; margin-top: 16px; margin-bottom: 3px; }
-  p { font-size: 12.5px; margin-bottom: 6px; }
-  ul { padding-left: 18px; } li { font-size: 12.5px; margin-bottom: 3px; }
-  hr { border: none; border-top: 1px solid #ddd; margin: 14px 0; }
-  @media print { body { margin: 0; padding: 20px; } }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(name)} - Professional CV</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', 'Roboto', Georgia, serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 48px 32px;
+      color: #1f2937;
+      line-height: 1.6;
+      background: #ffffff;
+    }
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      color: #0a2540;
+      border-bottom: 3px solid #0d7c66;
+      padding-bottom: 0.75rem;
+    }
+    h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+      color: #0d7c66;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 0.5rem;
+    }
+    h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-top: 1.5rem;
+      margin-bottom: 0.75rem;
+      color: #374151;
+    }
+    p {
+      margin-bottom: 1rem;
+      font-size: 1rem;
+    }
+    ul.list {
+      margin-bottom: 1rem;
+      padding-left: 2rem;
+      list-style-type: disc;
+    }
+    li {
+      margin-bottom: 0.5rem;
+      font-size: 1rem;
+    }
+    hr {
+      margin: 2rem 0;
+      border: none;
+      border-top: 2px solid #e5e7eb;
+    }
+    strong {
+      font-weight: 600;
+      color: #0a2540;
+    }
+    em { font-style: italic; }
+    @media print {
+      body { padding: 20px; font-size: 12pt; }
+      h1 { font-size: 20pt; }
+      h2 { font-size: 16pt; }
+      h3 { font-size: 14pt; }
+    }
+    @media (max-width: 768px) {
+      body { padding: 24px 16px; }
+      h1 { font-size: 1.875rem; }
+      h2 { font-size: 1.25rem; }
+    }
+  </style>
 </head>
-<body>${body}</body>
+<body>
+  ${wrapped}
+</body>
 </html>`;
+}
+
+function escapeHtml(str: string): string {
+  if (!str) return '';
+  const htmlEscapes: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return str.replace(/[&<>"']/g, (char) => htmlEscapes[char]);
 }
